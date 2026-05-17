@@ -96,3 +96,72 @@ Install dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Run the notebook:
+
+```bash
+jupyter notebook ai_embedding_compression_experiment.ipynb
+```
+
+Or run the Python script:
+
+```bash
+python ai_embedding_compression_experiment.py
+```
+
+## Project Files
+
+```text
+Ai-embedding-compression/
+├── README.md
+├── requirements.txt
+├── ai_embedding_compression_experiment.ipynb
+├── ai_embedding_compression_experiment.py
+├── metrics_summary.csv
+├── practical_methods_recall_ge_0_9.csv
+├── pq_ranking.csv
+├── compression_vs_retrieval.png
+├── top5_recall.png
+├── compression_ratio.png
+├── avg_cosine.png
+├── resume_bullets.md
+├── interview_pitch.md
+├── project_summary_zh.md
+└── portfolio_card.md
+```
+
+## Engineering Takeaways
+
+- int8 is nearly lossless but only provides about 4x compression.
+- int4 offers the best practical trade-off, achieving about 8x compression with Top-5 Recall above 0.90.
+- int2 is too aggressive for semantic retrieval.
+- Single-codebook VQ is too coarse for high-dimensional sentence embeddings.
+- PQ benefits from larger `m`, larger `k`, more training data, and L2 normalization, but basic PQ still trails int4.
+- Random rotation improves scalar quantization and connects this project to ideas used in modern AI compression methods such as TurboQuant.
+
+## Limitations
+
+- The experiment uses AG News instead of real RAG documents.
+- The current implementation uses brute-force retrieval instead of an ANN index.
+- PQ is implemented as a baseline and does not include OPQ, Residual PQ, or learned quantization.
+- Search latency and memory usage are estimated through compression ratio, not benchmarked with a production vector database.
+
+## Future Work
+
+- Integrate Faiss `IndexPQ`, `IndexIVFPQ`, or OPQ.
+- Evaluate search latency and index size on 100K+ embeddings.
+- Add Residual PQ or learned quantization.
+- Test with real RAG documents instead of AG News.
+- Compare against production vector databases such as OpenSearch, Qdrant, Milvus, or Faiss.
+
+## Portfolio Description
+
+This project demonstrates practical skills in:
+
+- Python experiment design
+- Embedding-based retrieval
+- Quantization and compression
+- Evaluation metrics
+- Data-driven engineering decisions
+- AI system optimization
