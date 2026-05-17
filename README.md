@@ -80,15 +80,15 @@ However, basic PQ still underperformed int4 scalar quantization in retrieval qua
 
 ### Compression Ratio vs Retrieval Quality
 
-![Compression Ratio vs Retrieval Quality](assets/compression_vs_retrieval.png)
+![Compression Ratio vs Retrieval Quality](compression_vs_retrieval.png)
 
 ### Top-5 Recall by Method
 
-![Top-5 Recall](assets/top5_recall.png)
+![Top-5 Recall](top5_recall.png)
 
 ### Compression Ratio by Method
 
-![Compression Ratio](assets/compression_ratio.png)
+![Compression Ratio](compression_ratio.png)
 
 ## How to Run
 
