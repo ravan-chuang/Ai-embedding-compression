@@ -1,7 +1,0 @@
-sentence-transformers
-datasets
-scikit-learn
-pandas
-numpy
-matplotlib
-nbformat
