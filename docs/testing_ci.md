@@ -4,7 +4,9 @@ The repository includes offline unit tests and a GitHub Actions workflow.
 
 ## Local test run
 
-Create the Conda environment and install the development dependencies:
+Use the production-like Conda environment locally. Faiss is installed through
+conda-forge, and the development requirements intentionally do **not** install
+a second pip Faiss package.
 
 ```bash
 conda env create -f environment.yml
@@ -24,10 +26,19 @@ The tests are intentionally small and do not download FiQA or an embedding model
 
 ## CI
 
-`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests. It:
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests.
 
-1. creates the Conda environment from `environment.yml`,
-2. installs application and test dependencies,
+GitHub Actions uses `environment-ci.yml`, a minimal Python-only Conda
+environment, then installs one Linux `faiss-cpu` wheel from pip via
+`requirements-ci.txt`. This is deliberate: the previous conda-forge Faiss
+package on the hosted Linux runner failed to load because an MKL shared library
+was unavailable. The CI environment is isolated and never mixes pip Faiss with
+a Conda Faiss package.
+
+The workflow:
+
+1. creates the minimal CI environment,
+2. installs CI dependencies,
 3. executes `pytest -q`.
 
 The workflow validates the CPU retrieval code path only. GPU benchmark execution
