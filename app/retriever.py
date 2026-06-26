@@ -34,7 +34,7 @@ class RetrievalService:
         missing = [str(p) for p in (config_path, index_path, documents_path) if not p.exists()]
         if missing:
             raise FileNotFoundError(
-                "Missing retrieval artifacts. Export them from the notebook first: "
+                "Missing retrieval artifacts. Run `python scripts/prepare_fiqa_documents.py` first: "
                 + ", ".join(missing)
             )
 
@@ -50,8 +50,7 @@ class RetrievalService:
                 f"but documents.jsonl contains {len(self.documents)} rows."
             )
 
-        model_name = self.config["embedding_model"]
-        self.model = SentenceTransformer(model_name, device="cpu")
+        self.model = SentenceTransformer(self.config["embedding_model"], device="cpu")
 
         default_nprobe = self.config.get("default_nprobe")
         if default_nprobe is not None:
@@ -62,32 +61,22 @@ class RetrievalService:
             raise RuntimeError("Retriever is not loaded.")
 
         try:
-            ivf = faiss.extract_index_ivf(self.index)
-            ivf.nprobe = nprobe
+            faiss.extract_index_ivf(self.index).nprobe = nprobe
         except RuntimeError:
-            # Exact Flat indexes do not expose nprobe. Leave them unchanged.
+            # Exact Flat indexes do not expose nprobe.
             pass
 
-    def search(self, query: str, top_k: int, nprobe: int | None = None) -> dict[str, Any]:
-        if not self.is_ready or self.index is None or self.model is None:
-            raise RuntimeError("Retriever is not ready.")
-
-        if nprobe is not None:
-            self.set_nprobe(nprobe)
-
-        start = time.perf_counter()
-        vector = self.model.encode(
-            [query],
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-            show_progress_bar=False,
-        ).astype(np.float32)
-
-        scores, indices = self.index.search(vector, top_k)
-        latency_ms = (time.perf_counter() - start) * 1000
-
+    def _format_results(
+        self,
+        query: str,
+        scores: np.ndarray,
+        indices: np.ndarray,
+        top_k: int,
+        nprobe: int | None,
+    ) -> dict[str, Any]:
         results: list[dict[str, Any]] = []
-        for rank, (score, idx) in enumerate(zip(scores[0], indices[0]), start=1):
+
+        for rank, (score, idx) in enumerate(zip(scores, indices), start=1):
             if idx < 0:
                 continue
             document = self.documents[int(idx)]
@@ -105,7 +94,58 @@ class RetrievalService:
             "query": query,
             "top_k": top_k,
             "nprobe": nprobe if nprobe is not None else self.config.get("default_nprobe"),
-            "latency_ms": round(latency_ms, 3),
             "index_type": self.config.get("index_type", type(self.index).__name__),
             "results": results,
+        }
+
+    def search(self, query: str, top_k: int, nprobe: int | None = None) -> dict[str, Any]:
+        batch = self.search_many([query], top_k=top_k, nprobe=nprobe)
+        item = batch["items"][0]
+        item["latency_ms"] = batch["latency_ms_total"]
+        return item
+
+    def search_many(
+        self,
+        queries: list[str],
+        top_k: int,
+        nprobe: int | None = None,
+    ) -> dict[str, Any]:
+        """Encode all queries once and issue a single matrix Faiss search call."""
+        if not self.is_ready or self.index is None or self.model is None:
+            raise RuntimeError("Retriever is not ready.")
+        if not queries:
+            raise ValueError("At least one query is required.")
+
+        if nprobe is not None:
+            self.set_nprobe(nprobe)
+
+        start = time.perf_counter()
+        vectors = self.model.encode(
+            queries,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        ).astype(np.float32)
+        scores, indices = self.index.search(vectors, top_k)
+        latency_ms_total = (time.perf_counter() - start) * 1000
+
+        items = [
+            self._format_results(
+                query=query,
+                scores=query_scores,
+                indices=query_indices,
+                top_k=top_k,
+                nprobe=nprobe,
+            )
+            for query, query_scores, query_indices in zip(queries, scores, indices)
+        ]
+
+        return {
+            "count": len(queries),
+            "top_k": top_k,
+            "nprobe": nprobe if nprobe is not None else self.config.get("default_nprobe"),
+            "index_type": self.config.get("index_type", type(self.index).__name__),
+            "latency_ms_total": round(latency_ms_total, 3),
+            "latency_ms_per_query": round(latency_ms_total / len(queries), 3),
+            "items": items,
         }

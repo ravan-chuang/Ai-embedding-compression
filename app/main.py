@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.retriever import RetrievalService
@@ -23,10 +22,10 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="RAG Embedding Compression Retrieval API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
-        "A small Faiss-backed retrieval service for the FiQA IVF-PQ benchmark. "
-        "The API loads a serialized CPU Faiss index and document metadata exported from the notebook."
+        "A Faiss IVF-PQ retrieval service backed by the FiQA benchmark artifacts. "
+        "The batch endpoint encodes queries and searches the index in one Faiss call."
     ),
     lifespan=lifespan,
 )
@@ -70,12 +69,10 @@ def search(payload: SearchRequest) -> dict:
 @app.post("/batch-search")
 def batch_search(payload: BatchSearchRequest) -> dict:
     try:
-        return {
-            "count": len(payload.queries),
-            "items": [
-                retriever.search(query=q, top_k=payload.top_k, nprobe=payload.nprobe)
-                for q in payload.queries
-            ],
-        }
+        return retriever.search_many(
+            queries=payload.queries,
+            top_k=payload.top_k,
+            nprobe=payload.nprobe,
+        )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

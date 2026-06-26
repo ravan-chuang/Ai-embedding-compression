@@ -1,6 +1,15 @@
 # Retrieval API
 
-This folder turns the benchmark into a small, CPU-portable retrieval service.
+The project includes a local FastAPI service that loads the exported FiQA
+`IndexIVFPQ` artifact and returns ranked documents.
+
+## Features
+
+- `GET /health`: confirms artifact and model loading.
+- `POST /search`: retrieves top-k documents for one query.
+- `POST /batch-search`: encodes all submitted queries together and sends one
+  matrix search request to Faiss. This is a true micro-batch path, not a loop
+  around single-query retrieval.
 
 ## Artifact contract
 
@@ -12,36 +21,53 @@ artifacts/fiqa_ivfpq_m96/
 └── documents.jsonl        # generated locally; ignored by Git
 ```
 
-`documents.jsonl` is intentionally not stored in Git because it is a 45 MB
-reconstructable copy of FiQA document metadata.
+`documents.jsonl` is not stored in Git because it is a reconstructable 45 MB
+copy of FiQA metadata.
 
-## One-time local setup
+## Environment setup on macOS Apple Silicon
 
-Create the metadata file from the official FiQA / BEIR corpus:
-
-```bash
-python scripts/prepare_fiqa_documents.py
-```
-
-The script downloads FiQA on first use, then writes
-`artifacts/fiqa_ivfpq_m96/documents.jsonl` in the exact document order used by
-the serialized Faiss index.
-
-## Run locally
+Use conda-forge for Faiss. This avoids mixing incompatible native OpenMP/Faiss
+binaries from Conda and pip.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+conda env create -f environment.yml
+conda activate rag-api
 pip install -r requirements-api.txt
-python scripts/prepare_fiqa_documents.py
-uvicorn app.main:app --reload
 ```
 
-Open interactive API docs at:
+If the environment already exists:
+
+```bash
+conda activate rag-api
+conda install -c conda-forge faiss-cpu
+pip install -r requirements-api.txt
+```
+
+## Generate local metadata
+
+```bash
+python scripts/prepare_fiqa_documents.py
+```
+
+The script downloads FiQA on first use and writes
+`artifacts/fiqa_ivfpq_m96/documents.jsonl` in the exact vector-addition order
+preserved by `doc_ids.json`.
+
+## Run the API
+
+```bash
+uvicorn app.main:app
+```
+
+Open interactive documentation:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
+
+Do not use `--reload` from the repository root unless you explicitly exclude
+`.venv/` or other environment directories; file watchers can trigger repeated
+reloads while dependencies are changing.
 
 ## Example requests
 
@@ -55,19 +81,15 @@ curl -X POST http://127.0.0.1:8000/search \
   -d '{"query":"What is a dividend stock?","top_k":5,"nprobe":16}'
 ```
 
-## Docker
-
-Before building the current Docker image, generate `documents.jsonl` locally:
-
 ```bash
-python scripts/prepare_fiqa_documents.py
-docker build -t embedding-retrieval-api .
-docker run --rm -p 8000:8000 embedding-retrieval-api
+curl -X POST http://127.0.0.1:8000/batch-search \
+  -H "Content-Type: application/json" \
+  -d '{"queries":["What is a dividend stock?","How does inflation affect bond prices?"],"top_k":3,"nprobe":16}'
 ```
 
 ## Scope
 
 This is a retrieval component, not a complete generative RAG application. It
-returns ranked FiQA source documents and scores. A later service layer can add
-reranking, prompt construction, an LLM, observability, request batching, and a
-Linux/NVIDIA GPU deployment path.
+returns ranked FiQA documents and similarity scores. Later extensions can add
+reranking, prompt construction, an LLM, observability, and a Linux/NVIDIA GPU
+serving image.
