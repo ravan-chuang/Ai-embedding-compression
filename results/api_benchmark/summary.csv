@@ -1,0 +1,4 @@
+endpoint,batch_size,requests,total_queries,client_p50_ms,client_p95_ms,client_mean_ms,server_p50_ms,server_p95_ms,query_throughput_qps
+/batch-search,8,30,240,9.93,11.953,10.034,8.901,10.996,797.3
+/batch-search,32,30,960,21.006,21.837,21.066,19.478,20.215,1519.05
+/search,1,30,30,6.627,7.304,6.68,5.804,6.482,149.7
