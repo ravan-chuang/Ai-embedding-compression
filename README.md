@@ -89,6 +89,25 @@ The SciFact experiment uses 5,183 documents and 300 judged queries. At `M=96, np
 
 This is evidence of **cross-dataset evaluation**, not a claim that one OPQ implementation universally wins. The relative OPQ benefit is dataset-dependent, and SciFact is too small to support a million-scale ANN speed claim.
 
+### Why SciFact serialized OPQ compression is lower
+
+The lower SciFact serialized deployment compression ratio is expected and is not a PQ regression.
+
+For OPQ serving, total deployment storage includes both the Faiss index and the fixed-size external query transform:
+
+```text
+total deployment bytes
+= serialized Faiss index bytes
++ 384 × 384 FP32 OPQ rotation matrix bytes
+```
+
+The FP32 rotation matrix has the same size for MiniLM and BGE-small because both use 384-dimensional embeddings. Its storage cost is therefore nearly fixed across datasets, while the index size grows with the number of document vectors.
+
+- **FiQA:** 57,638 documents. The fixed rotation overhead is amortized across a much larger index, so the OPQ artifact reaches about **12.01×** serialized deployment compression.
+- **SciFact:** 5,183 documents. The index is much smaller, so the same rotation matrix becomes a material share of total artifact storage and lowers serialized deployment compression to about **4.15×**.
+
+The analytical compression ratio still describes the index coding budget. The serialized ratio is intentionally stricter because it represents the actual bytes required to deploy a correct OPQ service.
+
 ## Cross-Model Validation: MiniLM × BGE-small
 
 The same `M=96`, `nlist=256`, `nprobe=16` protocol was also evaluated with
@@ -151,7 +170,7 @@ For experimental modes, storage accounting, latency protocol, and interpretation
 
 ## Key Findings
 
-- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time, so serialized deployment storage is lower than the analytical index-only compression ratio.
+- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time. Its fixed storage overhead is negligible for larger corpora such as FiQA but material for smaller corpora such as SciFact, so serialized deployment compression must be interpreted separately from index-only compression.
 - **The benchmark now covers two datasets × two embedding models:** FiQA and SciFact are evaluated with MiniLM and BGE-small under the same IVF-PQ / OPQ protocol.
 - **PyTorch OPQ is cross-model but not universally dominant:** it improves both BGE-small experiments, while its MiniLM behavior is dataset-dependent.
 - **Native Faiss `OPQMatrix` remains the strongest OPQ baseline:** it is the most stable quality performer across all evaluated dataset-model pairs.
@@ -423,4 +442,4 @@ FiQA GPU benchmark → serialized MiniLM OPQ-IVF-PQ artifact + query rotation
 → FiQA + SciFact × MiniLM + BGE-small validation
 ```
 
-The next milestone is a `v1.3.0` cross-model validation release. It should include the two BGE-small notebooks and this README summary, while retaining the verified MiniLM FiQA artifact as the deployed service baseline.
+Release `v1.3.0` captures the cross-model validation milestone while retaining the verified MiniLM FiQA artifact as the deployed service baseline. The next technical milestone is a 100K–1M vector scale benchmark.
