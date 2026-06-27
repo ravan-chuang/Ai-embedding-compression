@@ -20,3 +20,6 @@ venv/
 fiqa_rag_results/
 artifacts/fiqa_ivfpq_m96/documents.jsonl
 data/
+
+# Generated retrieval document metadata
+artifacts/**/documents.jsonl

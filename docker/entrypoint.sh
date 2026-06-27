@@ -5,7 +5,7 @@ metadata_path="${ARTIFACT_DIR}/documents.jsonl"
 
 if [[ ! -s "${metadata_path}" ]]; then
   echo "FiQA metadata is missing; generating ${metadata_path} ..."
-  python scripts/prepare_fiqa_documents.py
+  python scripts/prepare_fiqa_documents.py --artifact-dir "${ARTIFACT_DIR}"
 fi
 
 exec "$@"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from beir import util
@@ -18,7 +19,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--artifact-dir",
-        default="artifacts/fiqa_ivfpq_m96",
+        default=os.getenv("ARTIFACT_DIR", "artifacts/fiqa_opq_ivfpq_m96"),
         help="Directory containing doc_ids.json and index.faiss.",
     )
     parser.add_argument(

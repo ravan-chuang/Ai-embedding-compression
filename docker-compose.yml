@@ -5,7 +5,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     environment:
-      ARTIFACT_DIR: artifacts/fiqa_ivfpq_m96
+      ARTIFACT_DIR: artifacts/fiqa_opq_ivfpq_m96
     # Keeps the downloaded FiQA source data across image/container rebuilds.
     volumes:
       - fiqa-cache:/app/data

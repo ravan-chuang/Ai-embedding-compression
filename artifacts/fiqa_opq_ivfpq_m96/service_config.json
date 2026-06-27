@@ -1,0 +1,29 @@
+{
+  "artifact_version": "opq_ivfpq_service_v1",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "index_type": "IndexIVFPQ",
+  "vector_count": 57638,
+  "dimension": 384,
+  "default_nprobe": 16,
+  "source_method": "gpu_opq_ivfpq_adc_m96_b8_nlist256_np16",
+  "retrieval_mode": "gpu_compressed_domain_ivfpq_adc",
+  "normalization": "L2-normalize query embeddings before applying the OPQ rotation; use inner-product search over OPQ-rotated vectors.",
+  "query_transform": {
+    "enabled": true,
+    "type": "pytorch_learned_opq_rotation",
+    "file": "query_opq_rotation.npy",
+    "rotation_key": "opq_pq_m96_b8",
+    "dtype": "float32",
+    "shape": [
+      384,
+      384
+    ],
+    "operation": "normalized_query @ rotation_matrix",
+    "orthogonality_frobenius_error": 0.0022309422492980957
+  },
+  "files": {
+    "faiss_index": "index.faiss",
+    "doc_ids": "doc_ids.json",
+    "documents": "documents.jsonl"
+  }
+}

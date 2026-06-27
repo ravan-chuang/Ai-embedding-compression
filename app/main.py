@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.retriever import RetrievalService
 
-ARTIFACT_DIR = os.getenv("ARTIFACT_DIR", "artifacts/fiqa_ivfpq_m96")
+ARTIFACT_DIR = os.getenv( "ARTIFACT_DIR", "artifacts/fiqa_opq_ivfpq_m96", )
 retriever = RetrievalService(ARTIFACT_DIR)
 
 
