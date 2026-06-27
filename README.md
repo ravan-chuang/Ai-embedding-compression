@@ -15,7 +15,7 @@ This project separates two questions that are often conflated:
 ## Highlights
 
 - Evaluates Float32, INT8, INT4, PQ, OPQ, IVF-PQ, and OPQ-IVF-PQ.
-- Uses the FiQA / BEIR relevance benchmark instead of document-to-document nearest-neighbor proxies.
+- Uses FiQA and SciFact / BEIR relevance benchmarks instead of document-to-document nearest-neighbor proxies.
 - Measures Recall@5, Recall@10, MRR@10, nDCG@10, storage cost, latency, and QPS.
 - Implements genuine GPU compressed-domain retrieval with Faiss IVF-PQ ADC; document vectors are not reconstructed to Float32 during ANN search.
 - Exports a deployable OPQ-IVF-PQ artifact, including the learned query-side rotation matrix required for serving.
@@ -25,9 +25,9 @@ This project separates two questions that are often conflated:
 
 | Item | Configuration |
 |---|---|
-| Dataset | FiQA / BEIR |
-| Corpus | 57,638 documents |
-| Queries | 648 |
+| Primary benchmark | FiQA / BEIR |
+| FiQA corpus / queries | 57,638 documents / 648 queries |
+| Cross-dataset validation | SciFact / BEIR: 5,183 documents / 300 queries |
 | Embedding model | `sentence-transformers/all-MiniLM-L6-v2` |
 | Embedding dimension | 384 |
 | Retrieval metrics | Recall@5, Recall@10, MRR@10, nDCG@10 |
@@ -73,6 +73,21 @@ At the deployed `M=96, nprobe=16` configuration, PyTorch OPQ-IVF-PQ retains abou
 
 The serialized deployment figure includes the external `384 × 384` FP32 query-side OPQ rotation matrix. The analytical compression figure describes the index coding budget only.
 
+## Cross-Dataset Validation: SciFact / BEIR
+
+To test whether the FiQA trade-off is specific to a single financial-QA corpus, the same embedding model and ANN configuration were evaluated on SciFact / BEIR.
+
+| Method | `nprobe` | Serialized deployment compression | Recall@10 | nDCG@10 |
+|:--|--:|--:|--:|--:|
+| GPU Float32 FlatIP | – | 1.00× | 0.7833 | 0.6451 |
+| IVF-PQ M=96 | 16 | 6.00× | 0.7206 | 0.5975 |
+| PyTorch OPQ-IVF-PQ M=96 | 16 | 4.15× | 0.7056 | 0.5906 |
+| Native Faiss OPQMatrix-IVF-PQ M=96 | 16 | 4.15× | 0.7156 | 0.5969 |
+
+The SciFact experiment uses 5,183 documents and 300 judged queries. At `M=96, nprobe=16`, the strongest OPQ baseline was the native Faiss `OPQMatrix` configuration, while plain IVF-PQ slightly outperformed the PyTorch-learned OPQ variant on Recall@10 and nDCG@10.
+
+This is evidence of **cross-dataset evaluation**, not a claim that one OPQ implementation universally wins. The relative OPQ benefit is dataset-dependent, and SciFact is too small to support a million-scale ANN speed claim.
+
 ## Corrected GPU Faiss Search Timing
 
 The following values measure **GPU Faiss search only**. Quality uses all 648 FiQA queries, while latency and QPS use the 640 full-size queries from 10 batches of 64; the final 8-query tail is excluded from latency percentiles to avoid distortion.
@@ -103,9 +118,11 @@ For experimental modes, storage accounting, latency protocol, and interpretation
 ## Key Findings
 
 - **Deployment-aware compression accounting matters:** the OPQ query rotation is required at serving time, so serialized deployment storage is lower than the analytical index-only compression ratio.
-- **OPQ improves the selected M=96 configuration slightly:** at `nprobe=16`, PyTorch OPQ-IVF-PQ achieves a small nDCG gain over plain IVF-PQ at a similar search throughput.
-- **Higher `nprobe` improves quality at a throughput cost:** `nprobe=64` recovers more retrieval quality but substantially increases search latency.
+- **FiQA and SciFact both retain useful ranking quality after IVF-PQ compression:** the selected `M=96, nprobe=16` configuration is evaluated on two BEIR datasets rather than one.
+- **OPQ is dataset-dependent:** PyTorch OPQ slightly improves the selected FiQA nDCG result, while SciFact favors native Faiss `OPQMatrix` among the evaluated OPQ variants and plain IVF-PQ remains competitive.
+- **Higher `nprobe` improves quality at a throughput cost:** `nprobe=64` recovers more retrieval quality but increases search latency.
 - **ANN speedup requires candidate pruning:** full-scan PQ is not automatically faster than dense GPU retrieval at this corpus scale; IVF candidate pruning creates the main ANN throughput benefit.
+- **Small corpora are not a scale benchmark:** SciFact validates ranking behavior in another domain, but its 5,183-document corpus is not evidence of million-scale ANN performance.
 - **Batching matters:** benchmark timing is measured over true matrix search calls, not repeated single-query calls.
 
 ## Retrieval API
@@ -303,9 +320,11 @@ figures/
   throughput_stability.png
 notebooks/
   Ai_embedding_compression.ipynb
+  SciFact_OPQ_IVFPQ_Benchmark.ipynb
 results/
   api_benchmark/
   fiqa_gpu_benchmark/
+  scifact_gpu_benchmark/
 scripts/
   benchmark_api.py
   export_service_artifacts.py
@@ -325,28 +344,38 @@ requirements-ci.txt
 
 ## Reproducibility
 
+### FiQA serving and benchmark workflow
+
 1. Open `notebooks/Ai_embedding_compression.ipynb` in Google Colab.
 2. Enable an NVIDIA GPU runtime.
 3. Run all cells from top to bottom.
-4. The notebook exports GPU benchmark artifacts and the OPQ-IVF-PQ service artifact.
+4. The notebook exports FiQA GPU benchmark artifacts and the OPQ-IVF-PQ service artifact.
 
-For the GPU benchmark, use Google Colab with an NVIDIA GPU runtime and install `requirements-colab.txt`.
+### SciFact cross-dataset validation
+
+1. Open `notebooks/SciFact_OPQ_IVFPQ_Benchmark.ipynb` in Google Colab.
+2. Enable an NVIDIA GPU runtime.
+3. Run all cells from top to bottom.
+4. The notebook writes independent outputs under `scifact_rag_results/`; it does not overwrite the deployed FiQA API artifact.
+
+For both GPU experiments, use Google Colab with an NVIDIA GPU runtime and install `requirements-colab.txt`.
 
 ## Limitations and Next Steps
 
-- FiQA has 57,638 documents, so it is well suited to relevance evaluation but does not fully represent million-scale ANN workloads.
-- The current benchmark uses one English embedding model.
+- FiQA has 57,638 documents and SciFact has 5,183 documents. Together they improve domain coverage, but neither benchmark establishes million-scale ANN behavior.
+- The current cross-dataset experiment uses one English embedding model.
 - The deployment uses a learned external OPQ transform; any compatible serving implementation must apply the same query rotation before Faiss search.
-- Future work includes multi-dataset and multi-model evaluation, a 100K–1M vector scale benchmark, a Traditional Chinese retrieval benchmark, reranking, query-aware retrieval routing, and production observability / deployment hardening.
+- Future work includes a second embedding model, a 100K–1M vector scale benchmark, a Traditional Chinese retrieval benchmark, reranking, query-aware retrieval routing, and production observability / deployment hardening.
 
 ## Release Readiness
 
-The current repository represents a complete retrieval-engineering workflow:
+The repository now represents a retrieval-engineering workflow with an initial two-dataset validation layer:
 
 ```text
-GPU benchmark → serialized OPQ-IVF-PQ artifact + query rotation
+FiQA GPU benchmark → serialized OPQ-IVF-PQ artifact + query rotation
 → FastAPI serving → Docker metadata regeneration
 → Docker end-to-end verification → automated CI
+→ SciFact cross-dataset evaluation
 ```
 
-The next milestone is a `v1.1.0` release titled **OPQ-IVF-PQ Serving Release**.
+The next milestone is a `v1.2.0` cross-dataset validation release after committing the SciFact notebook and its README-ready result artifacts.
