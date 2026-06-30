@@ -27,7 +27,8 @@ This project separates two questions that are often conflated:
 |---|---|
 | Primary benchmark | FiQA / BEIR |
 | FiQA corpus / queries | 57,638 documents / 648 queries |
-| Cross-dataset validation | SciFact / BEIR: 5,183 documents / 300 queries |\n| Million-scale validation | Deterministic MS MARCO subset: 1,000,000 passages / 6,980 dev queries |
+| Cross-dataset validation | SciFact / BEIR: 5,183 documents / 300 queries |
+| Million-scale validation | Deterministic MS MARCO subset: 1,000,000 passages / 6,980 dev queries |
 | Primary deployment model | `sentence-transformers/all-MiniLM-L6-v2` |
 | Cross-model validation | `BAAI/bge-small-en-v1.5` |
 | Embedding dimension | 384 for both evaluated models |
@@ -214,7 +215,8 @@ For experimental modes, storage accounting, latency protocol, and interpretation
 
 ## Key Findings
 
-- **Million-scale MS MARCO validation:** on 1M BGE-small passages, plain IVF-PQ at `M=96, nprobe=64` retains 92.1% of exact Recall@10 with 13.01× serialized deployment compression; native OPQ adds only marginal quality at substantially higher offline build cost.\n- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time. Its fixed storage overhead is negligible for larger corpora such as FiQA but material for smaller corpora such as SciFact, so serialized deployment compression must be interpreted separately from index-only compression.
+- **Million-scale MS MARCO validation:** on 1M BGE-small passages, plain IVF-PQ at `M=96, nprobe=64` retains 92.1% of exact Recall@10 with 13.01× serialized deployment compression; native OPQ adds only marginal quality at substantially higher offline build cost.
+- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time. Its fixed storage overhead is negligible for larger corpora such as FiQA but material for smaller corpora such as SciFact, so serialized deployment compression must be interpreted separately from index-only compression.
 - **The benchmark now covers two datasets × two embedding models:** FiQA and SciFact are evaluated with MiniLM and BGE-small under the same IVF-PQ / OPQ protocol.
 - **PyTorch OPQ is cross-model but not universally dominant:** it improves both BGE-small experiments, while its MiniLM behavior is dataset-dependent.
 - **Native Faiss `OPQMatrix` remains the strongest OPQ baseline:** it is the most stable quality performer across all evaluated dataset-model pairs.
@@ -427,7 +429,8 @@ results/
   fiqa_gpu_benchmark/
   scifact_gpu_benchmark/
   fiqa_bge_small_gpu_benchmark/
-  scifact_bge_small_gpu_benchmark/\n  msmarco_scale_results/
+  scifact_bge_small_gpu_benchmark/
+  msmarco_scale_results/
 scripts/
   benchmark_api.py
   export_service_artifacts.py
