@@ -15,7 +15,7 @@ This project separates two questions that are often conflated:
 ## Highlights
 
 - Evaluates Float32, INT8, INT4, PQ, OPQ, IVF-PQ, and OPQ-IVF-PQ.
-- Uses FiQA and SciFact / BEIR relevance benchmarks across MiniLM and BGE-small embedding models instead of document-to-document nearest-neighbor proxies.
+- Uses FiQA and SciFact / BEIR relevance benchmarks across MiniLM and BGE-small embedding models, plus a deterministic 1M-passage MS MARCO scale validation, instead of document-to-document nearest-neighbor proxies.
 - Measures Recall@5, Recall@10, MRR@10, nDCG@10, storage cost, latency, and QPS.
 - Implements genuine GPU compressed-domain retrieval with Faiss IVF-PQ ADC; document vectors are not reconstructed to Float32 during ANN search.
 - Exports a deployable MiniLM OPQ-IVF-PQ artifact, including the learned query-side rotation matrix required for serving.
@@ -27,7 +27,7 @@ This project separates two questions that are often conflated:
 |---|---|
 | Primary benchmark | FiQA / BEIR |
 | FiQA corpus / queries | 57,638 documents / 648 queries |
-| Cross-dataset validation | SciFact / BEIR: 5,183 documents / 300 queries |
+| Cross-dataset validation | SciFact / BEIR: 5,183 documents / 300 queries |\n| Million-scale validation | Deterministic MS MARCO subset: 1,000,000 passages / 6,980 dev queries |
 | Primary deployment model | `sentence-transformers/all-MiniLM-L6-v2` |
 | Cross-model validation | `BAAI/bge-small-en-v1.5` |
 | Embedding dimension | 384 for both evaluated models |
@@ -108,6 +108,50 @@ The FP32 rotation matrix has the same size for MiniLM and BGE-small because both
 
 The analytical compression ratio still describes the index coding budget. The serialized ratio is intentionally stricter because it represents the actual bytes required to deploy a correct OPQ service.
 
+
+## Million-Scale Validation: MS MARCO 1M
+
+To test whether the observed compression and ANN trade-offs remain useful beyond small BEIR corpora, the project includes a deterministic **1,000,000-passage MS MARCO** benchmark using `BAAI/bge-small-en-v1.5` embeddings and a Tesla T4 GPU.
+
+### Setup
+
+| Item | Configuration |
+|---|---|
+| Corpus | 1,000,000 deterministic MS MARCO passages |
+| Queries | 6,980 MS MARCO dev queries |
+| Embedding model | `BAAI/bge-small-en-v1.5` |
+| Embedding dimension | 384 |
+| IVF configuration | `nlist=4096` |
+| PQ configuration | `M=96`, `nbits=8`, FP16 lookup tables |
+| OPQ configuration | Native Faiss `OPQMatrix`, `niter=50`, `niter_pq=4` |
+| GPU | NVIDIA Tesla T4 |
+
+### Main Results
+
+| Method | `nprobe` | Recall@10 | MRR@10 | nDCG@10 | P95 search latency | QPS | Serialized deployment compression |
+|:--|--:|--:|--:|--:|--:|--:|--:|
+| GPU FlatIP exact | – | 0.8563 | 0.6370 | 0.6870 | 0.428 ms | 2,418 | 1.00× |
+| IVF-PQ M=96 | 16 | 0.7195 | 0.5361 | 0.5770 | 0.021 ms | 53,644 | 13.01× |
+| IVF-PQ M=96 | 32 | 0.7596 | 0.5619 | 0.6064 | 0.043 ms | 25,557 | 13.01× |
+| IVF-PQ M=96 | 64 | 0.7887 | 0.5834 | 0.6297 | 0.078 ms | 13,607 | 13.01× |
+| Native Faiss OPQMatrix + IVF-PQ M=96 | 64 | 0.7895 | 0.5842 | 0.6304 | 0.076 ms | 13,815 | 12.94× |
+
+### Deployment-Aware Interpretation
+
+At `M=96, nprobe=64`, plain IVF-PQ retains **92.1%** of exact Recall@10 while reducing serialized deployment storage by **13.01×**.
+
+Native Faiss OPQ produces only a marginal gain at this high-rate configuration:
+
+- Recall@10: `0.7887 → 0.7895` (`+0.0008`)
+- nDCG@10: `0.6297 → 0.6304` (`+0.0008`)
+- Build time: `16.0 s → 2,094.4 s` (`~130.6×` longer)
+
+This suggests that when 384-dimensional embeddings are split into 96 PQ subvectors of only 4 dimensions each, plain IVF-PQ is already highly expressive and OPQ has limited remaining quantization error to remove.
+
+The practical default at this scale is therefore plain IVF-PQ at `M=96, nprobe=32`, while `nprobe=64` is the higher-recall serving mode. Native OPQ remains an important baseline, especially for lower-rate PQ settings where rotation may provide more value.
+
+> Timing measures GPU Faiss search only. It excludes embedding generation, HTTP transport, artifact loading, and response serialization.
+
 ## Cross-Model Validation: MiniLM × BGE-small
 
 The same `M=96`, `nlist=256`, `nprobe=16` protocol was also evaluated with
@@ -170,7 +214,7 @@ For experimental modes, storage accounting, latency protocol, and interpretation
 
 ## Key Findings
 
-- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time. Its fixed storage overhead is negligible for larger corpora such as FiQA but material for smaller corpora such as SciFact, so serialized deployment compression must be interpreted separately from index-only compression.
+- **Million-scale MS MARCO validation:** on 1M BGE-small passages, plain IVF-PQ at `M=96, nprobe=64` retains 92.1% of exact Recall@10 with 13.01× serialized deployment compression; native OPQ adds only marginal quality at substantially higher offline build cost.\n- **Deployment-aware compression accounting matters:** the external OPQ query rotation is required at serving time. Its fixed storage overhead is negligible for larger corpora such as FiQA but material for smaller corpora such as SciFact, so serialized deployment compression must be interpreted separately from index-only compression.
 - **The benchmark now covers two datasets × two embedding models:** FiQA and SciFact are evaluated with MiniLM and BGE-small under the same IVF-PQ / OPQ protocol.
 - **PyTorch OPQ is cross-model but not universally dominant:** it improves both BGE-small experiments, while its MiniLM behavior is dataset-dependent.
 - **Native Faiss `OPQMatrix` remains the strongest OPQ baseline:** it is the most stable quality performer across all evaluated dataset-model pairs.
@@ -376,13 +420,13 @@ notebooks/
   Ai_embedding_compression.ipynb
   SciFact_OPQ_IVFPQ_Benchmark.ipynb
   FiQA_BGE_Small_OPQ_IVFPQ_Benchmark.ipynb
-  SciFact_BGE_Small_OPQ_IVFPQ_Benchmark.ipynb
+  SciFact_BGE_Small_OPQ_IVFPQ_Benchmark.ipynb\n  MSMARCO_1M_OPQ_Metrics_Sweep_v1_1.ipynb
 results/
   api_benchmark/
   fiqa_gpu_benchmark/
   scifact_gpu_benchmark/
   fiqa_bge_small_gpu_benchmark/
-  scifact_bge_small_gpu_benchmark/
+  scifact_bge_small_gpu_benchmark/\n  msmarco_scale_results/
 scripts/
   benchmark_api.py
   export_service_artifacts.py
@@ -422,14 +466,23 @@ requirements-ci.txt
 3. These notebooks write independent outputs under `fiqa_bge_small_rag_results/` and `scifact_bge_small_rag_results/`.
 4. They are benchmark-only and do not overwrite the deployed MiniLM FiQA artifact.
 
+
+### Million-scale MS MARCO validation
+
+1. Open `notebooks/MSMARCO_1M_OPQ_Metrics_Sweep_v1_1.ipynb` in Google Colab.
+2. Enable an NVIDIA GPU runtime.
+3. Run all cells from top to bottom.
+4. The notebook downloads MS MARCO source files, creates a deterministic 1M-passage subset, writes FP16 embedding memmaps, and exports benchmark summaries under `msmarco_scale_results/`.
+5. Large source data and serialized indexes are intentionally excluded from Git history; commit reproducible code, summaries, metadata, and figures only.
+
 For all GPU experiments, use Google Colab with an NVIDIA GPU runtime and install `requirements-colab.txt`.
 
 ## Limitations and Next Steps
 
-- FiQA has 57,638 documents and SciFact has 5,183 documents. The two datasets and two models improve generalization evidence, but they do not establish million-scale ANN behavior.
+- FiQA and SciFact provide cross-dataset ranking validation, while the deterministic MS MARCO 1M experiment provides a single-GPU million-scale retrieval benchmark. It does not yet establish multi-node, billion-vector, or online-production behavior.
 - The benchmark currently uses two English embedding models; it does not yet validate multilingual or Traditional Chinese retrieval.
 - The deployment uses a learned external OPQ transform; any compatible serving implementation must apply the same query rotation before Faiss search.
-- Future work includes a 100K–1M vector scale benchmark, a Traditional Chinese retrieval benchmark, reranking, query-aware retrieval routing, model-specific deployment selection, and production observability / deployment hardening.
+- Future work includes lower-rate `M=24/32/48` Pareto sweeps, a Traditional Chinese retrieval benchmark, reranking, query-aware retrieval routing, model-specific deployment selection, and production observability / deployment hardening.
 
 ## Release Readiness
 
@@ -440,6 +493,7 @@ FiQA GPU benchmark → serialized MiniLM OPQ-IVF-PQ artifact + query rotation
 → FastAPI serving → Docker metadata regeneration
 → Docker end-to-end verification → automated CI
 → FiQA + SciFact × MiniLM + BGE-small validation
+→ MS MARCO 1M GPU IVF-PQ / native OPQ scale validation
 ```
 
-Release `v1.3.0` captures the cross-model validation milestone while retaining the verified MiniLM FiQA artifact as the deployed service baseline. The next technical milestone is a 100K–1M vector scale benchmark.
+Release `v1.4.0` captures the million-scale validation milestone while retaining the verified MiniLM FiQA artifact as the deployed service baseline. The next technical milestone is a lower-rate PQ Pareto sweep and an original compression-method comparison.
