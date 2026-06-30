@@ -23,3 +23,10 @@ data/
 
 # Generated retrieval document metadata
 artifacts/**/documents.jsonl
+
+# MS MARCO 1M benchmark artifacts
+msmarco_scale_data/
+msmarco_scale_results/*.faiss
+msmarco_scale_results/*.memmap
+msmarco_scale_results/*.npy
+msmarco_scale_results/*.pt
