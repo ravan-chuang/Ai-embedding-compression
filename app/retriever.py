@@ -1,6 +1,7 @@
 """Faiss-backed retrieval service primitives."""
 
 from __future__ import annotations
+from app.reranker import CrossEncoderReranker
 
 import json
 import time
@@ -23,6 +24,7 @@ class RetrievalService:
         self.documents: list[dict[str, Any]] = []
         self.config: dict[str, Any] = {}
         self.query_rotation: np.ndarray | None = None
+        self.reranker: CrossEncoderReranker | None = None
 
     @property
     def is_ready(self) -> bool:
@@ -85,6 +87,19 @@ class RetrievalService:
 
         if default_nprobe is not None:
             self.set_nprobe(int(default_nprobe))
+
+        reranker_config = self.config.get("reranker", {})
+
+        if reranker_config.get("enabled", False):
+            self.reranker = CrossEncoderReranker(
+                model_name=reranker_config.get(
+                    "model_name",
+                    "BAAI/bge-reranker-base",
+                    ),
+                    device=reranker_config.get("device", "cpu"),
+                    batch_size=int(reranker_config.get("batch_size", 16)),
+                    )
+            self.reranker.load()
 
     def _load_query_transform(self) -> None:
         """Load the query-side OPQ rotation when configured."""
@@ -199,11 +214,15 @@ class RetrievalService:
         query: str,
         top_k: int,
         nprobe: int | None = None,
+        rerank: bool = False,
+        candidate_k: int | None = None,
     ) -> dict[str, Any]:
         batch = self.search_many(
-            [query],
+            queries=[query],
             top_k=top_k,
             nprobe=nprobe,
+            rerank=rerank,
+            candidate_k=candidate_k,
         )
 
         item = batch["items"][0]
@@ -212,62 +231,100 @@ class RetrievalService:
         return item
 
     def search_many(
-        self,
-        queries: list[str],
-        top_k: int,
-        nprobe: int | None = None,
-    ) -> dict[str, Any]:
-        """Embed all queries once, then perform one matrix Faiss search."""
+            self,
+            queries: list[str],
+            top_k: int,
+            nprobe: int | None = None,
+            rerank: bool = False,
+            candidate_k: int | None = None
+            ) -> dict[str, Any]:
+        """Embed queries, retrieve ANN candidates, and optionally rerank them."""
+
         if not self.is_ready or self.index is None:
             raise RuntimeError("Retriever is not ready.")
 
         if not queries:
             raise ValueError("At least one query is required.")
 
+        if rerank and self.reranker is None:
+            raise RuntimeError(
+                "Reranking was requested but no reranker is configured."
+                )
+
+        if candidate_k is None:
+            candidate_k = max(top_k, 50 if rerank else top_k)
+
+        if candidate_k < top_k:
+            raise ValueError("candidate_k must be greater than or equal to top_k.")
+
         if nprobe is not None:
             self.set_nprobe(nprobe)
 
-        start_time = time.perf_counter()
-
+        total_start = time.perf_counter()
+        embedding_start = time.perf_counter()
         vectors = self._encode_queries(queries)
-        scores, indices = self.index.search(vectors, top_k)
+        embedding_latency_ms = (time.perf_counter() - embedding_start) * 1000.0
 
-        latency_ms_total = (
-            time.perf_counter() - start_time
-        ) * 1000.0
+        retrieval_start = time.perf_counter()
+        scores, indices = self.index.search(vectors, candidate_k)
+        retrieval_latency_ms = (time.perf_counter() - retrieval_start) * 1000.0
 
-        items = [
-            self._format_results(
+        items = []
+        rerank_latency_ms = 0.0
+
+        for query, query_scores, query_indices in zip(queries, scores, indices):
+            item = self._format_results(
                 query=query,
                 scores=query_scores,
                 indices=query_indices,
-                top_k=top_k,
+                top_k=candidate_k,
                 nprobe=nprobe,
-            )
-            for query, query_scores, query_indices in zip(
-                queries,
-                scores,
-                indices,
-            )
-        ]
+                )
+
+            candidates = item["results"]
+
+            if rerank:
+                rerank_start = time.perf_counter()
+                ranked = self.reranker.rerank(query, candidates)
+                rerank_latency_ms += (
+                    time.perf_counter() - rerank_start
+                    ) * 1000.0
+
+                item["results"] = ranked[:top_k]
+                item["rerank_enabled"] = True
+                item["candidate_k"] = candidate_k
+            else:
+                item["results"] = candidates[:top_k]
+                item["rerank_enabled"] = False
+                item["candidate_k"] = candidate_k
+
+            item["top_k"] = top_k
+            items.append(item)
+
+        latency_ms_total = (time.perf_counter() - total_start) * 1000.0
 
         return {
             "count": len(queries),
             "top_k": top_k,
+            "candidate_k": candidate_k,
             "nprobe": (
                 nprobe
                 if nprobe is not None
                 else self.config.get("default_nprobe")
-            ),
-            "index_type": self.config.get(
-                "index_type",
-                type(self.index).__name__,
-            ),
-            "query_transform_enabled": self.query_rotation is not None,
-            "latency_ms_total": round(latency_ms_total, 3),
-            "latency_ms_per_query": round(
-                latency_ms_total / len(queries),
-                3,
-            ),
-            "items": items,
-        }
+                ),
+                "index_type": self.config.get(
+                    "index_type",
+                    type(self.index).__name__,
+                ),
+                "query_transform_enabled": self.query_rotation is not None,
+                "rerank_enabled": rerank,
+                "latency_ms_total": round(latency_ms_total, 3),
+                "embedding_latency_ms": round(embedding_latency_ms, 3),
+                "ann_search_latency_ms": round(retrieval_latency_ms, 3),
+                "rerank_latency_ms": round(rerank_latency_ms, 3),
+                "latency_ms_per_query": round(
+                    latency_ms_total / len(queries),
+                    3,
+                ),
+                "items": items,
+            }

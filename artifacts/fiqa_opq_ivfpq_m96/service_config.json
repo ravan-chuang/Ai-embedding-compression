@@ -25,5 +25,11 @@
     "faiss_index": "index.faiss",
     "doc_ids": "doc_ids.json",
     "documents": "documents.jsonl"
+  },
+  "reranker": {
+    "enabled": true,
+    "model_name": "BAAI/bge-reranker-base",
+    "device": "cpu",
+    "batch_size": 16
   }
 }

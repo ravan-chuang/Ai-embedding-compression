@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from app.retriever import RetrievalService
 
-ARTIFACT_DIR = os.getenv( "ARTIFACT_DIR", "artifacts/fiqa_opq_ivfpq_m96", )
+ARTIFACT_DIR = os.getenv(
+    "ARTIFACT_DIR",
+    "artifacts/fiqa_opq_ivfpq_m96",
+)
 retriever = RetrievalService(ARTIFACT_DIR)
 
 
@@ -21,25 +25,32 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="RAG Embedding Compression Retrieval API",
-    version="0.2.0",
+    version="0.3.0",
     description=(
-        "A Faiss IVF-PQ retrieval service backed by the FiQA benchmark artifacts. "
-        "The batch endpoint encodes queries and searches the index in one Faiss call."
+        "Faiss IVF-PQ retrieval with optional cross-encoder reranking."
     ),
     lifespan=lifespan,
 )
 
 
 class SearchRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=2000, examples=["What is a dividend stock?"])
+    query: str = Field(
+        min_length=1,
+        max_length=2000,
+        examples=["What is a dividend stock?"],
+    )
     top_k: int = Field(default=5, ge=1, le=20)
     nprobe: int | None = Field(default=None, ge=1, le=256)
+    rerank: bool = False
+    candidate_k: int | None = Field(default=None, ge=1, le=100)
 
 
 class BatchSearchRequest(BaseModel):
     queries: list[str] = Field(min_length=1, max_length=32)
     top_k: int = Field(default=5, ge=1, le=20)
     nprobe: int | None = Field(default=None, ge=1, le=256)
+    rerank: bool = False
+    candidate_k: int | None = Field(default=None, ge=1, le=100)
 
 
 @app.get("/health")
@@ -50,6 +61,12 @@ def health() -> dict:
         "index_type": retriever.config.get("index_type"),
         "embedding_model": retriever.config.get("embedding_model"),
         "document_count": len(retriever.documents),
+        "reranker_enabled": retriever.reranker is not None,
+        "reranker_model": (
+            retriever.reranker.model_name
+            if retriever.reranker is not None
+            else None
+        ),
     }
 
 
@@ -60,6 +77,8 @@ def search(payload: SearchRequest) -> dict:
             query=payload.query,
             top_k=payload.top_k,
             nprobe=payload.nprobe,
+            rerank=payload.rerank,
+            candidate_k=payload.candidate_k,
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -72,6 +91,8 @@ def batch_search(payload: BatchSearchRequest) -> dict:
             queries=payload.queries,
             top_k=payload.top_k,
             nprobe=payload.nprobe,
+            rerank=payload.rerank,
+            candidate_k=payload.candidate_k,
         )
     except (RuntimeError, ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
