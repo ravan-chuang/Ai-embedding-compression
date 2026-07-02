@@ -20,6 +20,7 @@ This project separates two questions that are often conflated:
 - Implements genuine GPU compressed-domain retrieval with Faiss IVF-PQ ADC; document vectors are not reconstructed to Float32 during ANN search.
 - Exports a deployable MiniLM OPQ-IVF-PQ artifact, including the learned query-side rotation matrix required for serving.
 - Ships a verified FastAPI retrieval service, Docker Compose deployment, metadata regeneration flow, unit tests, and GitHub Actions CI.
+- Includes an optional BGE cross-encoder reranking path after OPQ-IVF-PQ candidate retrieval, with experimental FiQA evaluation and true multi-query rerank batching.
 
 ## Benchmark Setup
 
@@ -254,11 +255,78 @@ query
 
 The API exposes:
 
-- `GET /health` for service and artifact readiness.
+- `GET /health` for service and artifact readiness, including optional reranker readiness metadata.
 - `POST /search` for single-query top-k retrieval.
-- `POST /batch-search` for true micro-batched retrieval: queries are embedded together and sent to Faiss in one matrix search call.
+- `POST /batch-search` for true micro-batched retrieval: queries are embedded together and sent to Faiss in one matrix search call. When reranking is enabled, all query-candidate pairs are also scored through one cross-encoder prediction call.
 
 The OPQ contract is validated by the service configuration. When `query_transform.enabled` is true, the retriever loads `query_opq_rotation.npy` and applies it before Faiss search.
+
+### Experimental two-stage reranking
+
+The service also supports an **optional** second-stage BGE cross-encoder reranker:
+
+```text
+query
+→ MiniLM embedding + OPQ rotation
+→ Faiss OPQ-IVF-PQ candidate retrieval
+→ optional BGE CrossEncoder reranking
+→ final top-k documents
+```
+
+The request fields are:
+
+- `rerank`: enable second-stage reranking for the request.
+- `candidate_k`: number of ANN candidates retrieved before reranking; it must be at least `top_k`.
+
+The bundled FiQA artifact keeps `reranker.enabled: false` by default. This preserves the verified low-latency ANN serving path and avoids loading the cross-encoder model at startup. To run reranking experiments locally, temporarily enable the reranker block in `artifacts/fiqa_opq_ivfpq_m96/service_config.json`, restart the service, and send `"rerank": true`.
+
+Example experimental request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query":"What is a dividend stock?",
+    "top_k":5,
+    "candidate_k":10,
+    "nprobe":16,
+    "rerank":true
+  }'
+```
+
+Reranked results expose both the original ANN score and the cross-encoder score:
+
+```json
+{
+  "ann_score": 0.7153,
+  "rerank_score": 0.9990
+}
+```
+
+#### FiQA reranker evaluation
+
+A reproducible 100-query FiQA evaluation is recorded under `results/rerank_fiqa_benchmark/`. The tested `BAAI/bge-reranker-base` CPU configuration did **not** improve the deployed MiniLM OPQ-IVF-PQ baseline on that subset, so reranking remains experimental and disabled by default.
+
+| Pipeline | Recall@10 | MRR@10 | nDCG@10 | P95 local service latency |
+|:--|--:|--:|--:|--:|
+| OPQ-IVF-PQ only | 0.4782 | 0.4888 | 0.4216 | 6.94 ms |
+| OPQ-IVF-PQ + rerank, `candidate_k=10` | 0.4782 | 0.4404 | 0.3939 | 651.84 ms |
+| OPQ-IVF-PQ + rerank, `candidate_k=20` | 0.4639 | 0.4390 | 0.3840 | 1509.23 ms |
+
+This result is intentionally retained as a negative result rather than presented as a default-quality claim. On the evaluated subset, reranking degraded MRR@10 and nDCG@10; at `candidate_k=20`, it also pushed some relevant candidates below the final top-10 cutoff. Timing includes local query embedding, OPQ rotation, ANN retrieval, CPU reranking, and result formatting; it excludes HTTP transport, container startup, and model-download time.
+
+The repository also supports true multi-query rerank batching through `rerank_many()`. It combines all `(query, candidate document)` pairs from `/batch-search` into one cross-encoder prediction call. This is an architectural batching capability, not a blanket latency-speedup claim: a small four-query local CPU test did not improve throughput because of short batches and document-length padding.
+
+To reproduce the evaluation, temporarily enable the reranker in the artifact configuration and run:
+
+```bash
+python scripts/benchmark_reranker.py \
+  --max-queries 100 \
+  --candidate-ks 10 20 \
+  --top-k 10 \
+  --nprobe 16 \
+  --output-dir results/rerank_fiqa_benchmark_local
+```
 
 ### Local API setup
 
@@ -314,6 +382,8 @@ curl -X POST http://127.0.0.1:8000/batch-search \
   -H "Content-Type: application/json" \
   -d '{"queries":["What is a dividend stock?","How does inflation affect bond prices?"],"top_k":3,"nprobe":16}'
 ```
+
+For experimental batched reranking, temporarily enable the reranker in `service_config.json`, then add `"rerank":true` and a `candidate_k` value to the request body.
 
 A verified Docker `POST /search` request returned `query_transform_enabled: true` and relevant dividend-related FiQA passages, confirming that the deployed API uses the OPQ query transform.
 
@@ -383,7 +453,7 @@ See [Docker API](docs/docker_api.md).
 
 ### Testing and CI
 
-The repository includes **7 offline unit tests** for artifact consistency, retriever behavior, batch search, and endpoint logic.
+The repository includes **10 offline unit tests** for artifact consistency, retriever behavior, endpoint logic, single-query reranking, multi-query reranking, and batch rerank integration.
 
 ```bash
 pip install -r requirements-dev.txt
@@ -400,6 +470,7 @@ GitHub Actions runs the test suite on pushes to `main` and pull requests. See [T
     ci.yml
 app/
   main.py
+  reranker.py
   retriever.py
 artifacts/
   fiqa_opq_ivfpq_m96/
@@ -431,13 +502,16 @@ results/
   fiqa_bge_small_gpu_benchmark/
   scifact_bge_small_gpu_benchmark/
   msmarco_scale_results/
+  rerank_fiqa_benchmark/
 scripts/
   benchmark_api.py
+  benchmark_reranker.py
   export_service_artifacts.py
   prepare_fiqa_documents.py
 tests/
   test_api.py
   test_artifact_contract.py
+  test_reranker.py
   test_retriever.py
 Dockerfile
 docker-compose.yml
@@ -486,7 +560,8 @@ For all GPU experiments, use Google Colab with an NVIDIA GPU runtime and install
 - FiQA and SciFact provide cross-dataset ranking validation, while the deterministic MS MARCO 1M experiment provides a single-GPU million-scale retrieval benchmark. It does not yet establish multi-node, billion-vector, or online-production behavior.
 - The benchmark currently uses two English embedding models; it does not yet validate multilingual or Traditional Chinese retrieval.
 - The deployment uses a learned external OPQ transform; any compatible serving implementation must apply the same query rotation before Faiss search.
-- Future work includes lower-rate `M=24/32/48` Pareto sweeps, a Traditional Chinese retrieval benchmark, reranking, query-aware retrieval routing, model-specific deployment selection, and production observability / deployment hardening.
+- The current BGE CPU reranker configuration is experimental: it did not improve the recorded 100-query FiQA subset and adds substantial local latency. Future reranking work should compare domain-appropriate models, title-aware / truncated document formatting, and throughput under realistic batch loads before making a production-default claim.
+- Future work includes lower-rate `M=24/32/48` Pareto sweeps, a Traditional Chinese retrieval benchmark, query-aware retrieval routing, model-specific deployment selection, and production observability / deployment hardening.
 
 ## Release Readiness
 
@@ -498,6 +573,8 @@ FiQA GPU benchmark → serialized MiniLM OPQ-IVF-PQ artifact + query rotation
 → Docker end-to-end verification → automated CI
 → FiQA + SciFact × MiniLM + BGE-small validation
 → MS MARCO 1M GPU IVF-PQ / native OPQ scale validation
+→ optional BGE reranking experiment + reproducible negative-result evaluation
+→ true multi-query cross-encoder batching for `/batch-search`
 ```
 
-Release `v1.4.0` captures the million-scale validation milestone while retaining the verified MiniLM FiQA artifact as the deployed service baseline. The next technical milestone is a lower-rate PQ Pareto sweep and an original compression-method comparison.
+Release `v1.4.0` captures the million-scale validation milestone while retaining the verified MiniLM FiQA artifact as the deployed service baseline. The optional reranker is intentionally disabled in that default artifact because the recorded FiQA evaluation did not justify its latency cost. The next technical milestone is a lower-rate PQ Pareto sweep and an original compression-method comparison.
