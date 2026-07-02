@@ -2,16 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 from sentence_transformers import CrossEncoder
-
-
-@dataclass
-class RerankResult:
-    index: int
-    score: float
 
 
 class CrossEncoderReranker:
@@ -43,45 +36,68 @@ class CrossEncoderReranker:
         query: str,
         documents: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        return self.rerank_many([(query, documents)])[0]
+
+    def rerank_many(
+        self,
+        query_documents: list[tuple[str, list[dict[str, Any]]]],
+    ) -> list[list[dict[str, Any]]]:
+        """Rerank candidate lists using one CrossEncoder batch prediction."""
+
         if self.model is None:
             raise RuntimeError("Reranker is not loaded.")
 
-        if not documents:
-            return []
+        flat_pairs: list[tuple[str, str]] = []
+        offsets: list[tuple[int, int]] = []
 
-        pairs = [
-            (
-                query,
-                self._document_text(document),
+        for query, documents in query_documents:
+            start = len(flat_pairs)
+
+            flat_pairs.extend(
+                (query, self._document_text(document))
+                for document in documents
             )
-            for document in documents
-        ]
+
+            offsets.append((start, len(flat_pairs)))
+
+        if not flat_pairs:
+            return [[] for _ in query_documents]
 
         scores = self.model.predict(
-            pairs,
+            flat_pairs,
             batch_size=self.batch_size,
             show_progress_bar=False,
         )
 
-        ranked = []
-        for document, score in zip(documents, scores):
-            enriched = dict(document)
-            enriched["ann_score"] = enriched["score"]
-            enriched["rerank_score"] = float(score)
-            ranked.append(enriched)
+        ranked_groups: list[list[dict[str, Any]]] = []
 
-        ranked.sort(key=lambda item: item["rerank_score"], reverse=True)
+        for (_, documents), (start, end) in zip(query_documents, offsets):
+            ranked: list[dict[str, Any]] = []
 
-        for rank, item in enumerate(ranked, start=1):
-            item["rank"] = rank
+            for document, score in zip(documents, scores[start:end]):
+                enriched = dict(document)
+                enriched["ann_score"] = enriched["score"]
+                enriched["rerank_score"] = float(score)
+                ranked.append(enriched)
 
-        return ranked
+            ranked.sort(
+                key=lambda item: item["rerank_score"],
+                reverse=True,
+            )
+
+            for rank, item in enumerate(ranked, start=1):
+                item["rank"] = rank
+
+            ranked_groups.append(ranked)
+
+        return ranked_groups
 
     @staticmethod
     def _document_text(document: dict[str, Any]) -> str:
-        title = document.get("title", "").strip()
-        text = document.get("text", "").strip()
+        title = str(document.get("title", "")).strip()
+        text = str(document.get("text", "")).strip()
 
         if title and text:
             return f"{title}\n{text}"
+
         return title or text

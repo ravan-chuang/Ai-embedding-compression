@@ -231,14 +231,14 @@ class RetrievalService:
         return item
 
     def search_many(
-            self,
-            queries: list[str],
-            top_k: int,
-            nprobe: int | None = None,
-            rerank: bool = False,
-            candidate_k: int | None = None
-            ) -> dict[str, Any]:
-        """Embed queries, retrieve ANN candidates, and optionally rerank them."""
+        self,
+        queries: list[str],
+        top_k: int,
+        nprobe: int | None = None,
+        rerank: bool = False,
+        candidate_k: int | None = None,
+    ) -> dict[str, Any]:
+        """Embed queries, search ANN candidates, and optionally rerank in batch."""
 
         if not self.is_ready or self.index is None:
             raise RuntimeError("Retriever is not ready.")
@@ -249,57 +249,76 @@ class RetrievalService:
         if rerank and self.reranker is None:
             raise RuntimeError(
                 "Reranking was requested but no reranker is configured."
-                )
+            )
 
         if candidate_k is None:
             candidate_k = max(top_k, 50 if rerank else top_k)
 
         if candidate_k < top_k:
-            raise ValueError("candidate_k must be greater than or equal to top_k.")
+            raise ValueError(
+                "candidate_k must be greater than or equal to top_k."
+            )
 
         if nprobe is not None:
             self.set_nprobe(nprobe)
 
         total_start = time.perf_counter()
+
         embedding_start = time.perf_counter()
         vectors = self._encode_queries(queries)
-        embedding_latency_ms = (time.perf_counter() - embedding_start) * 1000.0
+        embedding_latency_ms = (
+            time.perf_counter() - embedding_start
+        ) * 1000.0
 
         retrieval_start = time.perf_counter()
         scores, indices = self.index.search(vectors, candidate_k)
-        retrieval_latency_ms = (time.perf_counter() - retrieval_start) * 1000.0
+        ann_search_latency_ms = (
+            time.perf_counter() - retrieval_start
+        ) * 1000.0
 
-        items = []
-        rerank_latency_ms = 0.0
-
-        for query, query_scores, query_indices in zip(queries, scores, indices):
-            item = self._format_results(
+        items = [
+            self._format_results(
                 query=query,
                 scores=query_scores,
                 indices=query_indices,
                 top_k=candidate_k,
                 nprobe=nprobe,
-                )
+            )
+            for query, query_scores, query_indices in zip(
+                queries,
+                scores,
+                indices,
+            )
+        ]
 
-            candidates = item["results"]
+        rerank_latency_ms = 0.0
 
-            if rerank:
-                rerank_start = time.perf_counter()
-                ranked = self.reranker.rerank(query, candidates)
-                rerank_latency_ms += (
-                    time.perf_counter() - rerank_start
-                    ) * 1000.0
+        if rerank:
+            rerank_start = time.perf_counter()
 
+            ranked_groups = self.reranker.rerank_many(
+                [
+                    (item["query"], item["results"])
+                    for item in items
+                ]
+            )
+
+            rerank_latency_ms = (
+                time.perf_counter() - rerank_start
+            ) * 1000.0
+
+            for item, ranked in zip(items, ranked_groups):
                 item["results"] = ranked[:top_k]
                 item["rerank_enabled"] = True
                 item["candidate_k"] = candidate_k
-            else:
-                item["results"] = candidates[:top_k]
+        else:
+            for item in items:
+                item["results"] = item["results"][:top_k]
                 item["rerank_enabled"] = False
                 item["candidate_k"] = candidate_k
 
+        for item in items:
             item["top_k"] = top_k
-            items.append(item)
 
         latency_ms_total = (time.perf_counter() - total_start) * 1000.0
 
@@ -311,20 +330,20 @@ class RetrievalService:
                 nprobe
                 if nprobe is not None
                 else self.config.get("default_nprobe")
-                ),
-                "index_type": self.config.get(
-                    "index_type",
-                    type(self.index).__name__,
-                ),
-                "query_transform_enabled": self.query_rotation is not None,
-                "rerank_enabled": rerank,
-                "latency_ms_total": round(latency_ms_total, 3),
-                "embedding_latency_ms": round(embedding_latency_ms, 3),
-                "ann_search_latency_ms": round(retrieval_latency_ms, 3),
-                "rerank_latency_ms": round(rerank_latency_ms, 3),
-                "latency_ms_per_query": round(
-                    latency_ms_total / len(queries),
-                    3,
-                ),
-                "items": items,
-            }
+            ),
+            "index_type": self.config.get(
+                "index_type",
+                type(self.index).__name__,
+            ),
+            "query_transform_enabled": self.query_rotation is not None,
+            "rerank_enabled": rerank,
+            "latency_ms_total": round(latency_ms_total, 3),
+            "embedding_latency_ms": round(embedding_latency_ms, 3),
+            "ann_search_latency_ms": round(ann_search_latency_ms, 3),
+            "rerank_latency_ms": round(rerank_latency_ms, 3),
+            "latency_ms_per_query": round(
+                latency_ms_total / len(queries),
+                3,
+            ),
+            "items": items,
+        }
