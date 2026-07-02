@@ -30,3 +30,4 @@ msmarco_scale_results/*.faiss
 msmarco_scale_results/*.memmap
 msmarco_scale_results/*.npy
 msmarco_scale_results/*.pt
+.cache/

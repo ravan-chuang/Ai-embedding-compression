@@ -27,7 +27,7 @@
     "documents": "documents.jsonl"
   },
   "reranker": {
-    "enabled": true,
+    "enabled": false,
     "model_name": "BAAI/bge-reranker-base",
     "device": "cpu",
     "batch_size": 16

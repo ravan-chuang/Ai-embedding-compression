@@ -1,0 +1,47 @@
+[
+  {
+    "rerank_enabled": false,
+    "candidate_k": 10,
+    "top_k": 10,
+    "nprobe": 16,
+    "query_count": 100,
+    "recall_at_10": 0.4782301587301588,
+    "mrr_at_10": 0.48880555555555555,
+    "ndcg_at_10": 0.4215713191346234,
+    "mean_latency_ms": 6.027699999999999,
+    "p50_latency_ms": 5.887499999999999,
+    "p95_latency_ms": 6.93515,
+    "timing_scope": "Sequential in-process RetrievalService calls; includes query embedding, OPQ rotation, Faiss search, optional CPU reranking, and result formatting.",
+    "embedding_latency_note": "Per-component timings are not emitted by search(); use service batch instrumentation for component breakdown."
+  },
+  {
+    "rerank_enabled": true,
+    "candidate_k": 10,
+    "top_k": 10,
+    "nprobe": 16,
+    "query_count": 100,
+    "recall_at_10": 0.4782301587301588,
+    "mrr_at_10": 0.44044047619047616,
+    "ndcg_at_10": 0.39386168906550273,
+    "mean_latency_ms": 536.96622,
+    "p50_latency_ms": 590.8745,
+    "p95_latency_ms": 651.84155,
+    "timing_scope": "Sequential in-process RetrievalService calls; includes query embedding, OPQ rotation, Faiss search, optional CPU reranking, and result formatting.",
+    "embedding_latency_note": "Per-component timings are not emitted by search(); use service batch instrumentation for component breakdown."
+  },
+  {
+    "rerank_enabled": true,
+    "candidate_k": 20,
+    "top_k": 10,
+    "nprobe": 16,
+    "query_count": 100,
+    "recall_at_10": 0.4638968253968254,
+    "mrr_at_10": 0.4389523809523809,
+    "ndcg_at_10": 0.38395673806194763,
+    "mean_latency_ms": 1234.01847,
+    "p50_latency_ms": 1251.0875,
+    "p95_latency_ms": 1509.22625,
+    "timing_scope": "Sequential in-process RetrievalService calls; includes query embedding, OPQ rotation, Faiss search, optional CPU reranking, and result formatting.",
+    "embedding_latency_note": "Per-component timings are not emitted by search(); use service batch instrumentation for component breakdown."
+  }
+]
