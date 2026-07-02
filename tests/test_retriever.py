@@ -119,3 +119,50 @@ def test_load_rejects_index_document_count_mismatch(
 
     with pytest.raises(ValueError, match="Index/document mismatch"):
         RetrievalService(artifact_dir).load()
+
+
+class FakeBatchReranker:
+    def __init__(self) -> None:
+        self.calls: list[list[tuple[str, list[dict]]]] = []
+
+    def rerank_many(
+        self,
+        query_documents: list[tuple[str, list[dict]]],
+    ) -> list[list[dict]]:
+        self.calls.append(query_documents)
+
+        ranked_groups: list[list[dict]] = []
+
+        for _, documents in query_documents:
+            ranked = [dict(document) for document in reversed(documents)]
+
+            for rank, document in enumerate(ranked, start=1):
+                document["ann_score"] = document["score"]
+                document["rerank_score"] = float(len(ranked) - rank + 1)
+                document["rank"] = rank
+
+            ranked_groups.append(ranked)
+
+        return ranked_groups
+
+
+def test_batch_search_reranks_all_queries_in_one_call(
+    loaded_service: RetrievalService,
+) -> None:
+    fake_reranker = FakeBatchReranker()
+    loaded_service.reranker = fake_reranker
+
+    result = loaded_service.search_many(
+        ["alpha", "beta"],
+        top_k=1,
+        nprobe=16,
+        rerank=True,
+        candidate_k=2,
+    )
+
+    assert len(fake_reranker.calls) == 1
+    assert len(fake_reranker.calls[0]) == 2
+    assert result["rerank_enabled"] is True
+    assert result["candidate_k"] == 2
+    assert result["rerank_latency_ms"] >= 0
+    assert [item["results"][0]["rank"] for item in result["items"]] == [1, 1]
